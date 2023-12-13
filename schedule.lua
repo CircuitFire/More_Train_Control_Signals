@@ -1,34 +1,32 @@
---[[
-global.train_data[train.id]{ --Each train has extra data attached to it indexed by its id.
-  .edited           --true if the train data has been recently modified.
-  .primed           --the index of station that marks the schedule is ready.
-  .currently_at     --The last station the train has stopped at.
-  .groups[index]{   --List of all groups in the schedule and the indexes of where they start and end.
-    .start
-    .stop
-  }
-  .fuel_stations[]  --List of all indexes of fuel stations in the schedule
-  .records[index]{  --Data attached to individual records in the trains schedule.
-    .group          --The index of the group the the record is in or nil.
-    .is_fuel        --
-    .is_depot       --
-    .is_priority    --
-    .is_optional    --
-    .is_disabled
-  }
-}
-]]
+---@class record
+---@field group integer --The index of the group the the record is in or nil.
+---@field is_fuel boolean
+---@field is_depot boolean
+---@field is_priority boolean
+---@field is_optional boolean
+---@field is_disabled boolean
+
+---@class train_data
+---@field edited boolean
+---@field primed station           --the index of station that marks the schedule is ready.
+---@field currently_at station     --The last station the train has stopped at.
+---@field groups {start: station, stop: station}[] --List of all groups in the schedule and the indexes of where they start and end.
+---@field fuel_stations station[] --List of all indexes of fuel stations in the schedule
+---@field records record[] --Data attached to individual records in the trains schedule.
 
 require("signals")
 
 Schedule = {}
 
+---@param schedule TrainSchedule
+---@return boolean
 function Schedule.has_temp_records(schedule)
     for _, record in pairs(schedule.records) do
         if record.temporary then return true end
     end
 end
 
+---@param schedule TrainSchedule
 function Schedule.open_schedule(schedule)
     for _, record in pairs(schedule.records) do
         if record.station then
@@ -37,11 +35,15 @@ function Schedule.open_schedule(schedule)
     end
 end
 
+---@param train LuaTrain
+---@param schedule TrainSchedule
 function Schedule.set_schedule(train, schedule)
     global.self_edit[train.id] = true
     train.schedule = schedule
 end
 
+---@param id TrainID
+---@param schedule TrainSchedule
 function Schedule.calc_train_data(id, schedule)
     local old_data = global.train_data[id]
     local data = {
@@ -92,6 +94,8 @@ function Schedule.calc_train_data(id, schedule)
     global.train_data[id] = data
 end
 
+---@param loco LuaEntity Locomotive
+---@return boolean
 local function loco_needs_fuel(loco)
     local burner = loco.burner
     if not burner or #burner.inventory == 0 then return false end
@@ -106,6 +110,8 @@ local function loco_needs_fuel(loco)
     return fuel < seconds
 end
 
+---@param train LuaTrain
+---@return boolean
 local function train_needs_refueling(train)
     for _, movers in pairs (train.locomotives) do
         for _, loco in pairs (movers) do
@@ -115,12 +121,20 @@ local function train_needs_refueling(train)
     return false
 end
 
-local function next_station(schedule, data, index)
-    local temp = index + 1
-    if temp > #schedule.records then return 1 end
-    return temp
-end
+-- ---@param schedule any
+-- ---@param data train_data
+-- ---@param index any
+-- ---@return integer
+-- local function next_station(schedule, data, index)
+--     local temp = index + 1
+--     if temp > #schedule.records then return 1 end
+--     return temp
+-- end
 
+---@param schedule LuaSchedule
+---@param data train_data
+---@param index station
+---@return station
 local function next_group(schedule, data, index)
     local group = data.records[index].group
     local current = (group and data.groups[group].stop) or index
@@ -130,18 +144,27 @@ local function next_group(schedule, data, index)
     return temp
 end
 
+---@param schedule LuaSchedule
+---@param data train_data
+---@param index station
 local function enable_at(schedule, data, index)
     if not data.records[index].is_disabled then return end
     data.records[index].is_disabled = false
     schedule.records[index].station = Signals.enable(schedule.records[index].station)
 end
 
+---@param schedule LuaSchedule
+---@param data train_data
+---@param index station
 local function disable_at(schedule, data, index)
     if data.records[index].is_disabled then return end
     data.records[index].is_disabled = true
     schedule.records[index].station = Signals.disable(schedule.records[index].station)
 end
 
+---@param train LuaTrain
+---@param schedule LuaSchedule
+---@param data train_data
 local function fuel_stations(train, schedule, data)
     if train_needs_refueling(train) then
         for _, index in pairs(data.fuel_stations) do
@@ -154,6 +177,9 @@ local function fuel_stations(train, schedule, data)
     end
 end
 
+---@param schedule LuaSchedule
+---@param data train_data
+---@return boolean
 local function check_for_depot(schedule, data)
     local next = next_group(schedule, data, data.currently_at)
 
@@ -163,6 +189,10 @@ local function check_for_depot(schedule, data)
     end
 end
 
+---@param schedule LuaSchedule
+---@param data train_data
+---@param group group
+---@param priority priority
 local function enable_group(schedule, data, group, priority)
     for i = data.groups[group].start, data.groups[group].stop do
         if priority or not data.records[i].is_optional then
@@ -171,6 +201,8 @@ local function enable_group(schedule, data, group, priority)
     end
 end
 
+---@param schedule LuaSchedule
+---@param data train_data
 local function disable_rest_of_group(schedule, data)
     local group = data.records[schedule.current].group
     if not group then return end
@@ -181,6 +213,8 @@ local function disable_rest_of_group(schedule, data)
     end
 end
 
+---@param schedule LuaSchedule
+---@param data train_data
 local function prime_next_group(schedule, data)
     if data.currently_at == data.primed then return end
 
@@ -205,6 +239,8 @@ local function prime_next_group(schedule, data)
     end
 end
 
+---@param train LuaTrain
+---@param schedule LuaSchedule
 function Schedule.arriving(train, schedule)
     local data = global.train_data[train.id]
 
@@ -219,12 +255,16 @@ function Schedule.arriving(train, schedule)
     fuel_stations(train, schedule, data)
 end
 
+---@param train LuaTrain
+---@param schedule LuaSchedule
 function Schedule.waiting(train, schedule)
     local data = global.train_data[train.id]
     data.currently_at = schedule.current
     prime_next_group(schedule, data)
 end
 
+---@param train LuaTrain
+---@param schedule LuaSchedule
 function Schedule.try_next_in_group(train, schedule)
     local data = global.train_data[train.id]
     local group = data.records[schedule.current].group
@@ -248,6 +288,7 @@ function Schedule.try_next_in_group(train, schedule)
     schedule.current = data.currently_at
 end
 
+---@param schedule LuaSchedule
 function Schedule.add_waits(schedule)
     if settings.global["wait-at-stops"].value == 0 then return end
     local wait_time = settings.global["wait-at-stops"].value * 60
@@ -279,8 +320,10 @@ function Schedule.add_waits(schedule)
     end
 end
 
+---@param event EventData on_train_created
+---@return boolean
 function Schedule.transfer_data(event)
-    game.print(string.format("old1: %s, old2: %s, new: %s", event.old_train_id_1, event.old_train_id_2, event.train.id))
+    -- game.print(string.format("old1: %s, old2: %s, new: %s", event.old_train_id_1, event.old_train_id_2, event.train.id))
     local old_1 = event.old_train_id_1
     local old_2 = event.old_train_id_2
 
